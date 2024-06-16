@@ -1,26 +1,55 @@
 pipeline {
     agent any
- parameters { 
-    choice(name: 'BRANCH_TO_BUILD', choices: ['war', 'jar'], description: '') 
-	string(name: 'MAVEN_GOAL', defaultValue: 'mvn install', description: 'maven build')
-}
-triggers { pollSCM('* * * * *') }
 
     stages {
         stage('SCM') {
             steps {
-                git branch: "${params.BRANCH_TO_BUILD}", url: 'https://github.com/awskaizen02/A10.git'
+                git branch: 'war', url: 'https://github.com/awskaizen02/A10.git'
             }
         }
-        stage('build') {
+	stage('Build') {
             steps {
-                bat "${params.MAVEN_GOAL}"
+                sh 'mvn clean'
+		sh 'mvn install'
             }
         }
-        stage('deploy') {
+	stage('Docker Image') {
             steps {
-                deploy adapters: [tomcat9(credentialsId: 'webserver1', path: '', url: 'http://localhost:9091/')], contextPath: 'demo-pipeline', war: '**/*.war'
-            }
-        }
+		script{
+		 app = docker.build("dockerpandian/june16")
+		  app.inside{
+			  sh 'echo $(curl localhost:8080)'
+					}
+				}
+     }
+     }
+stage('Push Docker Image') {
+            steps {
+		script{		
+	docker.withRegistry('https://registry.hub.docker.com', 'dhub') {
+	   app.push("${env.BUILD_NUMBER}")
+	   app.push("latest")
+					}
+				}
+			}
+                            }
+stage('Deploy to server') {
+    steps {
+	 input 'Deploy to Production?'
+	 milestone(1)
+	withCredentials([usernamePassword(credentialsId: 'ddeploy', usernameVariable: 'USERNAME', passwordVariable: 'USERPASS')]) {
+			script{										
+			  sh "sshpass -p '$USERPASS' -v ssh -o StrictHostKeyChecking=no $USERNAME@$dev_ip \"docker pull dockerpandian/june16:${env.BUILD_NUMBER}\""
+	try{
+sh "sshpass -p '$USERPASS' -v ssh -o StrictHostKeyChecking=no $USERNAME@$dev_ip \"docker stop demo-deploy\""
+sh "sshpass -p '$USERPASS' -v ssh -o StrictHostKeyChecking=no $USERNAME@$dev_ip \"docker rm  demo-deploy\""
+ }  catch (err) {
+	echo: 'caught error: $err'
+ }
+ sh "sshpass -p '$USERPASS' -v ssh -o StrictHostKeyChecking=no $USERNAME@$dev_ip \"docker run --restart always --name demo-deploy -p 8080:8080 -d dockerpandian/june16:${env.BUILD_NUMBER}\""
+				 }
+				}
+			}
+				}                        
     }
 }
